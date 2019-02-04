@@ -30,7 +30,17 @@ I recommend you running it on btrfs and turning on compression.
 -m  Mode, default is GLIBC
     *GLIBC* use fopen/fread to access files
     *DIRECT_IO* use system call with O_DIRECT flag to access files
+    
+## Commands
 
+BITCOUNT key [start] [end]
+    ```
+    SETBIT mykey 95 1 //size is 12 bytes
+    BITCOUNT mykey //same redis
+    BITCOUNT mykey 10 // from offset 10 to 12
+    BITCOUNT mykey 10 -1 // from offset 10 to 11
+    BITCOUNT mykey -3 -2 // from offset 9 to 10
+    ```
 
 
 ## Roadmap
@@ -45,6 +55,8 @@ v1.04 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update
 
 v2.0 Rebuild everything.
 
+BTW: If you have some feature requirements, please write an Issue let me know.
 
 
-***The current version without Direct_IO mode and synchronize on exit when working at GLIBC mode.***
+
+***WARNING: The current version without Direct_IO mode and synchronize on exit when working at GLIBC mode.***
