@@ -21,11 +21,10 @@ I recommend you running it on btrfs and turning on compression.
 -w  Number of worker, default is number of cores * 2
 
 -l  Listen, default is 127.0.0.1:6379
+
     ```
     -l 127.0.0.1:123
-    
     -l 192.168.0.1:123
-    
     -l :123
     ```
 
@@ -36,6 +35,7 @@ I recommend you running it on btrfs and turning on compression.
 ## Commands
 
 BITCOUNT key [start] [end]
+
     ```
     SETBIT mykey 95 1 //size is 12 bytes
     BITCOUNT mykey //same redis
