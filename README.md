@@ -21,10 +21,11 @@ I recommend you running it on btrfs and turning on compression.
 -w  Number of worker, default is number of cores * 2
 
 -l  Listen, default is 127.0.0.1:6379
-```
+    ```
     -l 127.0.0.1:123
+    -l 192.168.0.1:123
     -l :123
-```
+    ```
 
 -m  Mode, default is GLIBC
     *GLIBC* use fopen/fread to access files
@@ -34,7 +35,7 @@ I recommend you running it on btrfs and turning on compression.
 
 ## Roadmap
 
-v1.01 Add Direct_IO and optimization some module
+v1.01 Add Direct_IO and optimization some modules
 
 v1.02 Add BITCOP, means BITCOUNT(BITOP)
 
