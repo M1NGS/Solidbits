@@ -5,10 +5,13 @@ a redis style bitmap database
 
 Solidbits works on the udp protocol now, just a experimental product, but it work good.
 
-it supports BITGET/BITSET/BITCOUNT/BITOP, all command works like redis except BITCOUNT's parameter. 
+it supports BITGET/BITSET/BITCOUNT/BITOP, all command works like redis except BITCOUNT's parameter.
+
+file storage and hashtable depend on xxhash64, i did 20 million random key name tests and collision probability is zero.
+
+I think xxhash64 is safe for file storage.
 
 I recommend you running it on btrfs and turning on compression.
-
 
 ## Parameter options
 
@@ -47,13 +50,15 @@ BITCOUNT key [start] [end]
 
 ## Roadmap
 
-v1.01 Add Direct_IO and optimization some modules
+v1.01 Add Direct_IO and optimization some modules, it's a first release version.
 
-v1.02 Add BITCOP, means BITCOUNT(BITOP)
+v1.02 Add test tools and provides option in configure to completely without DLOG and DRETURN macros.
 
-v1.03 Add BITGOP, means BITGET(BITOP)
+v1.03 Add BITCOP, means BITCOUNT(BITOP)
 
-v1.04 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update when SETBIT.
+v1.04 Add BITGOP, means BITGET(BITOP)
+
+v1.05 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update when SETBIT.
 
 v2.0 Rebuild everything.
 
