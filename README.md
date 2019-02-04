@@ -3,7 +3,7 @@ a redis style bitmap database
 
 ## Introduce
 
-Solidbits works on the udp protocol now, just a experimental product, but it work good.
+Solidbits just a experimental product, works on the udp protocol now, it working good.
 
 it supports BITGET/BITSET/BITCOUNT/BITOP, all command works like redis except BITCOUNT's parameter.
 
