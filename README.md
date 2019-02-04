@@ -22,11 +22,11 @@ I recommend you running it on btrfs and turning on compression.
 
 -l  Listen, default is 127.0.0.1:6379
 
-    ```
+```
     -l 127.0.0.1:123
     -l 192.168.0.1:123
     -l :123
-    ```
+```
 
 -m  Mode, default is GLIBC
     *GLIBC* use fopen/fread to access files
@@ -36,13 +36,13 @@ I recommend you running it on btrfs and turning on compression.
 
 BITCOUNT key [start] [end]
 
-    ```
-    SETBIT mykey 95 1 //size is 12 bytes
+```
+    SETBIT mykey 95 1 //create a key and set size to 12 bytes
     BITCOUNT mykey //same redis
     BITCOUNT mykey 10 // from offset 10 to 12
     BITCOUNT mykey 10 -1 // from offset 10 to 11
     BITCOUNT mykey -3 -2 // from offset 9 to 10
-    ```
+```
 
 
 ## Roadmap
