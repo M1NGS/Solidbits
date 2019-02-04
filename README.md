@@ -18,7 +18,7 @@ I recommend you running it on btrfs and turning on compression.
 
 -p  PID file path
 
--w  Worker, default is number of cores * 2
+-w  Number of worker, default is number of cores * 2
 
 -l  Listen, default is 127.0.0.1:6379
 ```
@@ -34,7 +34,7 @@ I recommend you running it on btrfs and turning on compression.
 
 ## Roadmap
 
-v1.01 Add Direct_IO mode
+v1.01 Add Direct_IO and optimization some module
 
 v1.02 Add BITCOP, means BITCOUNT(BITOP)
 
@@ -42,7 +42,7 @@ v1.03 Add BITGOP, means BITGET(BITOP)
 
 v1.04 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update when SETBIT.
 
-v2 Rebuild.
+v2.0 Rebuild everything.
 
 
 
