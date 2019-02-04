@@ -58,7 +58,7 @@ v1.03 Add BITCOP, means BITCOUNT(BITOP)
 
 v1.04 Add BITGOP, means BITGET(BITOP)
 
-v1.05 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update when SETBIT.
+v1.05 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto updated when SETBIT.
 
 v2.0 Rebuild everything.
 
