@@ -1,5 +1,5 @@
 # Solidbits
-a redis style bitmap database
+A redis style bitmap database works on the filesystem
 
 ## Introduce
 
