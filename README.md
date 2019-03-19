@@ -66,4 +66,4 @@ BTW: If you have some feature requirements, please write an Issue let me know.
 
 
 
-***WARNING: The current version without Direct_IO mode and synchronize on exit when working at GLIBC mode.***
+***WARNING: The current version without Direct_IO mode.***
