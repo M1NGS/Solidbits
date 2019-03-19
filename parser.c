@@ -5,6 +5,7 @@ static int idx = 0;
 static struct job tjob;
 static pthread_cond_t parser_job_ready;
 static pthread_mutex_t parser_mutex;
+bool terminate;
 
 static int get_arg_count(char *str, size_t len)
 {
@@ -351,6 +352,11 @@ static void *process_request(void *arg)
             DLOG("No job, waitting...", id);
             pthread_cond_wait(&parser_job_ready, &parser_mutex);
         }
+        if (terminate)
+        {
+            DLOG("Parser thread #%d will be exit!", syscall(SYS_gettid));
+            pthread_exit(0);
+        }
     }
 
     pthread_exit(NULL);
@@ -359,6 +365,7 @@ static void *process_request(void *arg)
 void init_parser(void)
 {
     DLOG("into %s", __func__);
+    terminate = false;
     pthread_mutex_init(&parser_mutex, NULL);
     pthread_cond_init(&parser_job_ready, NULL);
     parsers = calloc(sizeof(struct parser_queue), PARSER_QUEUE_NUM);
