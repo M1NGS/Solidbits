@@ -201,6 +201,7 @@ int bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt);
 int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts);
 size_t (*write_to) (struct desc_table *dt, void *buf, size_t size, off_t offset);
 size_t (*read_from) (struct desc_table *dt, void *buf, size_t size, off_t offset);
+void (*close_files) (void);
 void init_file(void);
 char *time2string(char* buf, uint64_t us);
 

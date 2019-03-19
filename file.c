@@ -25,7 +25,7 @@ static int get_avalible_slot(void)
     idx = 0;
     if (DESC_HARD_LIMIT)
     {
-        LOG("Description table is full, request will be reject, beacuse DESC_HARD_LIMIT=%d", DESC_HARD_LIMIT);
+        LOG("Description table full, request will be reject, beacuse DESC_HARD_LIMIT=%d", DESC_HARD_LIMIT);
         DRETURN(-1, 1);
     }
     id = descs[lowest].hash % DESC_HASH_TABLE_SIZE;
@@ -62,12 +62,25 @@ static int get_avalible_slot(void)
     DRETURN(lowest, 1);
 }
 
+
 static void glibc_close(struct desc_table *dt)
 {
     DLOG("Closing key %016llx", dt->hash);
     fflush(dt->fd.glibc);
     fsync(fileno(dt->fd.glibc));
     fclose(dt->fd.glibc);
+}
+
+void glibc_close_files(void)
+{
+    int i;
+    for (i=0; DESC_TABLE_SIZE > i; i++)
+    {
+        if (descs[i].hash)
+        {
+            glibc_close(&descs[i]);    
+        }
+    }
 }
 
 static int glibc_open(XXH64_hash_t hash, int mode)
@@ -252,6 +265,7 @@ void init_file(void)
         read_from = &glibc_read;
         open_file = &glibc_open;
         close_file = &glibc_close;
+        close_files = &glibc_close_files;
     }
     else if (server.mode == DIRECT_IO)
     {
