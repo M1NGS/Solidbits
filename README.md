@@ -5,7 +5,7 @@ A redis style bitmap database works on the filesystem
 
 Solidbits just a experimental product, works on the udp protocol now, it working good.
 
-it supports BITGET/BITSET/BITCOUNT/BITOP, all command works like redis except BITCOUNT's parameter.
+it supports BITGET/BITSET/BITCOUNT/BITOP/BITCOP, all command works like redis except BITCOUNT's parameter.
 
 file storage and hashtable depend on xxhash64, i did 20 million random key name tests and collision probability is zero.
 
@@ -46,6 +46,11 @@ BITCOUNT key [start end]
     BITCOUNT mykey 10 -1 // from offset 10 to 11
     BITCOUNT mykey -3 -2 // from offset 9 to 10
 ```
+
+BITCOP is a visual command base on BITOP
+*
+BITOP operation ^ECOUNTOP key [key ...]
+*
 
 
 ## Roadmap
