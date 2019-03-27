@@ -51,7 +51,7 @@ static void free_args(char **args, int count)
     free(args);
 }
 
-static char **split_fill(char *str, size_t len, int count)
+static char **split_fill(char *str, size_t len, int count) //can't process multi-space, needs fix.
 {
     int i, o;
     DLOG("into %s(%s, %lu, %d)", __func__, str, len, count);
@@ -190,19 +190,38 @@ static int parse_arg(int id)
         }
         if (tjob.cmd.bitop.option == NOT && c != 4)
         {
-            reply("ERR:BITOP NOT MUST NEEDS ONE SOURCE\n", 36, &parsers[id].client);
+            reply("ERR:BITOP NOT JUST NEEDS ONE SOURCE\n", 36, &parsers[id].client);
             DLOG("Argument error: [%s]", parsers[id].buf);
             free_args(args, c - 1);
             DRETURN(-1, 1);
         }
-        strcpy(tjob.cmd.bitop.key, args[1]);
-        if (prepare_file(&tjob.desc[0], tjob.cmd.bitop.key, 2))
+        if (*args[1] == 5) //Ctrl+E mean countop
         {
-            reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
-            free_args(args, c - 1);
-            DLOG("Filesystem failed: [%s]", args[0]);
-            DRETURN(-1, 1);
+            if (!strcasecmp(args[1] + 1, "COUNTOP"))
+                tjob.cmd.bitop.hook = COUNTOP;
+            else if (!strcasecmp(args[1] + 1, "GETOP"))
+                tjob.cmd.bitop.hook = GETOP;
+            else
+            {
+                reply("ERR:UKNOW OPTION\n", 17, &parsers[id].client);
+                DLOG("Argument error: [%s]", parsers[id].buf);
+                free_args(args, c - 1);
+                DRETURN(-1, 1);
+            }
         }
+        else
+        {
+            tjob.cmd.bitop.hook = NONE;
+            strcpy(tjob.cmd.bitop.key, args[1]);
+            if (prepare_file(&tjob.desc[0], tjob.cmd.bitop.key, 2))
+            {
+                reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
+                free_args(args, c - 1);
+                DLOG("Filesystem failed: [%s]", args[0]);
+                DRETURN(-1, 1);
+            }
+        }
+        DLOG("Set BITOP hook to %d", tjob.cmd.bitop.hook);
         tjob.cmd.bitop.count = c - 3;
         if (prepare_files((struct desc_table ***)&tjob.desc[1], &args[2], tjob.cmd.bitop.count))
         {
@@ -238,6 +257,13 @@ static int parse_arg(int id)
             DLOG("Filesystem failed: [%s]", args[0]);
             free_args(args, c - 1);
             DRETURN(-1, 1);
+        }
+        if (tjob.desc[0]->length == 0)
+        {
+            reply("0\n", 2, &parsers[id].client);
+            DLOG("File size is zero: [%s]", args[0]);
+            free_args(args, c - 1);
+            DRETURN(-2, 1);
         }
         if (c == 2)
         {

@@ -53,6 +53,12 @@ enum OP_OPTIONS
     XOR,
     NOT
 };
+enum OP_HOOKS
+{
+    NONE,
+    COUNTOP,  //count(result)
+    GETOP
+};
 enum FIELD_OPTIONS
 {
     GET,
@@ -67,9 +73,7 @@ enum COMMANDS
     BITCOUNT,
     BITOP,
     BITFIELD,
-    BITPOS,
-    BITCOP,
-    BITGOP
+    BITPOS
 };
 
 struct setbit_cmd
@@ -96,6 +100,7 @@ struct bitop_cmd
 {
     char key[65];
     long count;
+    enum OP_HOOKS hook;
     enum OP_OPTIONS option;
 };
 
@@ -197,8 +202,8 @@ void init_job(void);
 int push_job(struct job *j);
 int setbitCommand(struct setbit_cmd *cmd, struct desc_table *dt);
 int getbitCommand(struct getbit_cmd *cmd, struct desc_table *dt);
-int bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt);
-int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts);
+long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt);
+long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts);
 size_t (*write_to) (struct desc_table *dt, void *buf, size_t size, off_t offset);
 size_t (*read_from) (struct desc_table *dt, void *buf, size_t size, off_t offset);
 void (*close_files) (void);
@@ -217,7 +222,7 @@ char *time2string(char* buf, uint64_t us);
 #define DRETURN(x, y)         \
     if (y == 1)               \
     {                         \
-        DLOG("return %d", x); \
+        DLOG("return %l", x); \
     }                         \
     else if (y == 2)          \
     {                         \

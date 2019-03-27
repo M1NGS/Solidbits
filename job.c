@@ -54,7 +54,8 @@ static int pop_job(struct job *j)
 void *do_job(void *id)
 {
     struct job tmp;
-    int r, w_id = (long)id;
+    int w_id = (long)id;
+    long r;
     char buf[16];
     workers[w_id].tid = syscall(SYS_gettid);
     pthread_mutex_lock(&job_mutex); // for first pop
@@ -80,7 +81,7 @@ void *do_job(void *id)
                     }
                     else
                     {
-                        reply(buf, snprintf(buf, 16, "%d\n", r), &tmp.client);
+                        reply(buf, snprintf(buf, 16, "%ld\n", r), &tmp.client);
                     }
                     break;
                 case GETBIT:
@@ -91,7 +92,7 @@ void *do_job(void *id)
                     }
                     else
                     {
-                        reply(buf, snprintf(buf, 16, "%d\n", r), &tmp.client);
+                        reply(buf, snprintf(buf, 16, "%ld\n", r), &tmp.client);
                     }
                     break;
                 case BITCOUNT:
@@ -102,7 +103,7 @@ void *do_job(void *id)
                     }
                     else
                     {
-                        reply(buf, snprintf(buf, 16, "%d\n", r), &tmp.client);
+                        reply(buf, snprintf(buf, 16, "%ld\n", r), &tmp.client);
                     }
                     break;
 
@@ -114,7 +115,7 @@ void *do_job(void *id)
                     }
                     else
                     {
-                        reply(buf, snprintf(buf, 16, "%d\n", r), &tmp.client);
+                        reply(buf, snprintf(buf, 16, "%ld\n", r), &tmp.client);
                     }
                     break;
                 default:

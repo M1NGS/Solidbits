@@ -37,7 +37,7 @@ I recommend you running it on btrfs and turning on compression.
     
 ## Commands
 
-BITCOUNT key [start] [end]
+BITCOUNT key [start end]
 
 ```
     SETBIT mykey 95 1 //create a key and set size to 12 bytes
@@ -63,6 +63,20 @@ v1.05 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto update
 v2.0 Rebuild everything.
 
 BTW: If you have some feature requirements, please write an Issue let me know.
+
+
+## Client of PHP
+
+```
+$sb = new Solidbits('127.0.0.1',1233);
+
+$sb->setbit('dist', 12, 1);
+$sb->getbit('dist', 12);
+$sb->bitop('and', 'dist', 'src1', "src2");
+$sb->bitcount('and'[, start, end]);
+$sb->bitop('not', 'nice');
+
+```
 
 
 

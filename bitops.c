@@ -96,14 +96,65 @@ int getbitCommand(struct getbit_cmd *cmd, struct desc_table *dt)
     DRETURN(bitval ? 1 : 0, 1);
 }
 
-int bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
+size_t redisPopcount(void *s, long count)
+{
+    size_t bits = 0;
+    unsigned char *p;
+    uint32_t *p4;
+    static const unsigned char bitsinbyte[256] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
+
+    /* Count bits 28 bytes at a time */
+    p4 = (uint32_t *)s;
+    while (count >= 28)
+    {
+        uint32_t aux1, aux2, aux3, aux4, aux5, aux6, aux7;
+
+        aux1 = *p4++;
+        aux2 = *p4++;
+        aux3 = *p4++;
+        aux4 = *p4++;
+        aux5 = *p4++;
+        aux6 = *p4++;
+        aux7 = *p4++;
+        count -= 28;
+
+        aux1 = aux1 - ((aux1 >> 1) & 0x55555555);
+        aux1 = (aux1 & 0x33333333) + ((aux1 >> 2) & 0x33333333);
+        aux2 = aux2 - ((aux2 >> 1) & 0x55555555);
+        aux2 = (aux2 & 0x33333333) + ((aux2 >> 2) & 0x33333333);
+        aux3 = aux3 - ((aux3 >> 1) & 0x55555555);
+        aux3 = (aux3 & 0x33333333) + ((aux3 >> 2) & 0x33333333);
+        aux4 = aux4 - ((aux4 >> 1) & 0x55555555);
+        aux4 = (aux4 & 0x33333333) + ((aux4 >> 2) & 0x33333333);
+        aux5 = aux5 - ((aux5 >> 1) & 0x55555555);
+        aux5 = (aux5 & 0x33333333) + ((aux5 >> 2) & 0x33333333);
+        aux6 = aux6 - ((aux6 >> 1) & 0x55555555);
+        aux6 = (aux6 & 0x33333333) + ((aux6 >> 2) & 0x33333333);
+        aux7 = aux7 - ((aux7 >> 1) & 0x55555555);
+        aux7 = (aux7 & 0x33333333) + ((aux7 >> 2) & 0x33333333);
+        bits += ((((aux1 + (aux1 >> 4)) & 0x0F0F0F0F) +
+                  ((aux2 + (aux2 >> 4)) & 0x0F0F0F0F) +
+                  ((aux3 + (aux3 >> 4)) & 0x0F0F0F0F) +
+                  ((aux4 + (aux4 >> 4)) & 0x0F0F0F0F) +
+                  ((aux5 + (aux5 >> 4)) & 0x0F0F0F0F) +
+                  ((aux6 + (aux6 >> 4)) & 0x0F0F0F0F) +
+                  ((aux7 + (aux7 >> 4)) & 0x0F0F0F0F)) *
+                 0x01010101) >>
+                24;
+    }
+    /* Count the remaining bytes. */
+    p = (unsigned char *)p4;
+    while (count--)
+        bits += bitsinbyte[*p++];
+    return bits;
+}
+
+long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
 {
     size_t o = 0, r, t = 0, bits = 0;
     void *s;
-    unsigned char *p;
-    uint32_t *p4;
     long count;
-    static const unsigned char bitsinbyte[256] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
+
     size_t strlen = dt->length;
     if (cmd->start < 0 && cmd->end < 0 && cmd->start > cmd->end)
     {
@@ -131,48 +182,7 @@ int bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
     {
         r = read_from(dt, s, FILE_BUFFER_SIZE, o);
         o += r;
-        p4 = (uint32_t *)s;
-        while (r >= 28)
-        {
-            uint32_t aux1, aux2, aux3, aux4, aux5, aux6, aux7;
-
-            aux1 = *p4++;
-            aux2 = *p4++;
-            aux3 = *p4++;
-            aux4 = *p4++;
-            aux5 = *p4++;
-            aux6 = *p4++;
-            aux7 = *p4++;
-            r -= 28;
-
-            aux1 = aux1 - ((aux1 >> 1) & 0x55555555);
-            aux1 = (aux1 & 0x33333333) + ((aux1 >> 2) & 0x33333333);
-            aux2 = aux2 - ((aux2 >> 1) & 0x55555555);
-            aux2 = (aux2 & 0x33333333) + ((aux2 >> 2) & 0x33333333);
-            aux3 = aux3 - ((aux3 >> 1) & 0x55555555);
-            aux3 = (aux3 & 0x33333333) + ((aux3 >> 2) & 0x33333333);
-            aux4 = aux4 - ((aux4 >> 1) & 0x55555555);
-            aux4 = (aux4 & 0x33333333) + ((aux4 >> 2) & 0x33333333);
-            aux5 = aux5 - ((aux5 >> 1) & 0x55555555);
-            aux5 = (aux5 & 0x33333333) + ((aux5 >> 2) & 0x33333333);
-            aux6 = aux6 - ((aux6 >> 1) & 0x55555555);
-            aux6 = (aux6 & 0x33333333) + ((aux6 >> 2) & 0x33333333);
-            aux7 = aux7 - ((aux7 >> 1) & 0x55555555);
-            aux7 = (aux7 & 0x33333333) + ((aux7 >> 2) & 0x33333333);
-            bits += ((((aux1 + (aux1 >> 4)) & 0x0F0F0F0F) +
-                      ((aux2 + (aux2 >> 4)) & 0x0F0F0F0F) +
-                      ((aux3 + (aux3 >> 4)) & 0x0F0F0F0F) +
-                      ((aux4 + (aux4 >> 4)) & 0x0F0F0F0F) +
-                      ((aux5 + (aux5 >> 4)) & 0x0F0F0F0F) +
-                      ((aux6 + (aux6 >> 4)) & 0x0F0F0F0F) +
-                      ((aux7 + (aux7 >> 4)) & 0x0F0F0F0F)) *
-                     0x01010101) >>
-                    24;
-        }
-        /* Count the remaining bytes. */
-        p = (unsigned char *)p4;
-        while (r--)
-            bits += bitsinbyte[*p++];
+        bits += redisPopcount(s, r);
     }
     free(s);
     DRETURN(bits, 1);
@@ -194,13 +204,13 @@ void op_free(unsigned char **p, long count)
     }
 }
 
-int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
+long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
 {
-    int i,  maxidx, idx, times, size, offset = 0;
-    size_t maxlen = 0;
+    int i, maxidx, idx, times, size, offset = 0;
+    size_t maxlen = 0, bits = 0;
     int t[cmd->count], r[cmd->count]; //always no use 0
     unsigned char *p[cmd->count];
-    unsigned long **lp = (unsigned long **)p;
+    unsigned long *lp[cmd->count];
     for (i = 0; i < cmd->count; i++)
     {
         if (dts[i] != NULL)
@@ -235,14 +245,15 @@ int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
     {
         for (i = 0; i < cmd->count; i++)
         {
+            memcpy(lp,p,sizeof(unsigned char *) * cmd->count);
             //simple and crude, because I think the condition of too complicated will be slower than this
-            bzero(p[i], FILE_BUFFER_SIZE); 
+            bzero(p[i], FILE_BUFFER_SIZE);
             if (t[i])
             {
                 read_from(dts[i], p[i], t[i]-- == 1 ? r[i] : FILE_BUFFER_SIZE, offset);
             }
         }
-        size = t[maxidx]? FILE_BUFFER_SIZE : r[maxidx];
+        size = t[maxidx] ? FILE_BUFFER_SIZE : r[maxidx];
         times = size / (sizeof(unsigned long) * 4);
         idx = 0;
         if (times)
@@ -303,11 +314,10 @@ int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
             {
                 while (times--)
                 {
-                    lp[0][0] = ~lp[1][0];
-                    lp[0][1] = ~lp[1][1];
-                    lp[0][2] = ~lp[1][2];
-                    lp[0][3] = ~lp[1][3];
-                    lp[1] += 4;
+                    lp[0][0] = ~lp[0][0];
+                    lp[0][1] = ~lp[0][1];
+                    lp[0][2] = ~lp[0][2];
+                    lp[0][3] = ~lp[0][3];
                     lp[0] += 4;
                     size -= sizeof(unsigned long) * 4;
                     idx += sizeof(unsigned long) * 4;
@@ -318,7 +328,7 @@ int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
         {
             if (cmd->option == NOT)
             {
-                p[0][idx] = ~p[1][idx];
+                p[0][idx] = ~p[0][idx];
                 idx++;
                 continue;
             }
@@ -341,13 +351,24 @@ int bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
             }
             idx++;
         }
-        if (!write_to(dts[-1], p[0], idx, offset))
+        if (cmd->hook == NONE)
         {
-            op_free(p, cmd->count);
-            DRETURN(-1, 1);
+            if (!write_to(dts[-1], p[0], idx, offset))
+            {
+                op_free(p, cmd->count);
+                DRETURN(-1, 1);
+            }
+        }
+        else if (cmd->hook == COUNTOP)
+        {
+            bits += redisPopcount((void *)p[0], idx);
         }
         offset += idx;
     }
     op_free(p, cmd->count);
+    if (cmd->hook == COUNTOP)
+    {
+        DRETURN(bits, 1);
+    }
     DRETURN(offset, 1);
 }
