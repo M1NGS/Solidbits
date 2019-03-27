@@ -48,9 +48,7 @@ BITCOUNT key [start end]
 ```
 
 BITCOP is a visual command base on BITOP
-*
-BITOP operation ^ECOUNTOP key [key ...]
-*
+*BITOP operation ^ECOUNTOP key [key ...]*
 
 
 ## Roadmap
