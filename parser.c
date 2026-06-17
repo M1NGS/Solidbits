@@ -1,16 +1,9 @@
-#include "solidbits.h"
-
-static pthread_t parser;
-static int idx = 0;
-static struct job tjob;
-static pthread_cond_t parser_job_ready;
-static pthread_mutex_t parser_mutex;
-bool terminate;
+#include "net.h"
+#include <stdlib.h>
 
 static int get_arg_count(char *str, size_t len)
 {
     off_t i, l = 0, c = 0;
-    len--; //without \n
     DLOG("into %s(%s, %lu)", __func__, str, len);
     for (i = 0; i < len; i++)
     {
@@ -24,22 +17,10 @@ static int get_arg_count(char *str, size_t len)
         }
     }
     if (i > l) //for last arg
-        c++;
-    DRETURN(c, 1);
-}
-
-static off_t next_space_at(char *str, size_t len)
-{
-    off_t i;
-    DLOG("into %s(%s, %lu)", __func__, str, len);
-    for (i = 0; i < len; i++)
     {
-        if (str[i] == 32) //space
-        {
-            DRETURN(i, 1);
-        }
+        c++;
     }
-    DRETURN(-1, 1);
+    DRETURN(c, 1);
 }
 
 static void free_args(char **args, int count)
@@ -51,355 +32,339 @@ static void free_args(char **args, int count)
     free(args);
 }
 
-static char **split_fill(char *str, size_t len, int count) //can't process multi-space, needs fix.
+/* split_fill: skip the command name, then split the rest into (count-1)
+ * space-separated args. Consecutive spaces are treated as ONE separator
+ * (aligned with get_arg_count). Input line has no trailing '\n' (framed
+ * by the net layer). Cursor-based walk, no size_t underflow. */
+static char **split_fill(char *str, size_t len, int count)
 {
-    int i, o;
+    int i;
+    size_t pos = 0, start;
+    char **tmp;
     DLOG("into %s(%s, %lu, %d)", __func__, str, len, count);
-    o = next_space_at(str, len); //skip cmd name
-    str += o + 1;
-    len -= o + 1;
-    len--; //without \n
+    while (pos < len && str[pos] == 32) pos++;   /* leading spaces (defensive) */
+    while (pos < len && str[pos] != 32) pos++;   /* command name */
     count--;
-    char **tmp = calloc(sizeof(char *), count);
+    tmp = calloc(sizeof(char *), count);
     for (i = 0; i < count; i++)
     {
-        o = next_space_at(str, len);
-        if (o == -1)
-            o = len;
-        tmp[i] = calloc(sizeof(char), o + 1);
-        memcpy(tmp[i], str, o);
-        str += o + 1;
-        len -= o + 1;
+        while (pos < len && str[pos] == 32) pos++;   /* skip ALL spaces between args */
+        start = pos;
+        while (pos < len && str[pos] != 32) pos++;   /* one arg */
+        tmp[i] = calloc(sizeof(char), pos - start + 1);
+        memcpy(tmp[i], str + start, pos - start);
         DLOG("Get #%d = [%s]", i, tmp[i]);
     }
     DRETURN(tmp, 3);
 }
 
-static int parse_arg(int id)
+static void release_all_descs(struct job *job)
+{
+    int i;
+    for (i = 0; i < ARG_PART_MAXIMUM; i++)
+    {
+        if (job->desc[i])
+        {
+            release_desc(job->desc[i]);
+            job->desc[i] = NULL;
+        }
+    }
+}
+
+static int copy_key(char *dst, const char *src)
+{
+    if (strlen(src) > 64)
+    {
+        return -1;
+    }
+    strcpy(dst, src);
+    return 0;
+}
+
+void parse_and_execute(struct work_req *w)
 {
     int c, r;
-    long t;
+    long t, result;
     char **args;
     XXH64_hash_t hash;
-    DLOG("into %s()", __func__);
-    if (parsers[id].size < CMD_MININUM)
+    char buf[16];
+    struct job *job = &w->job;
+
+    if (w->line_len < CMD_MININUM)
     {
-        reply("ERR:CMD TOO SHORT\n", 18, &parsers[id].client);
-        DLOG("Command too short: [%s]", parsers[id].buf);
-        DRETURN(-1, 1);
+        reply("ERR:CMD TOO SHORT\n", 18);
+        return;
     }
-    c = get_arg_count(parsers[id].buf, parsers[id].size);
-    hash = XXH64(parsers[id].buf, 5, 0);
-    bzero(&tjob, sizeof(struct job)); //clear for cache hash
+    c = get_arg_count(w->line, w->line_len);
+    hash = XXH64(w->line, 5, 0);
+    bzero(job, sizeof(struct job));
     switch (hash)
     {
-    case 13964470052823109277ULL:
+    case 13964470052823109277ULL: /* SETBIT */
         if (c != 4)
         {
-            reply("ERR:ARG TOO MANY OR FEW\n", 24, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
+            reply("ERR:ARG TOO MANY OR FEW\n", 24);
+            return;
         }
-        args = split_fill(parsers[id].buf, parsers[id].size, c);
-        tjob.cmd.setbit.offset = atoll(args[1]);
-        t = tjob.cmd.setbit.offset >> 3;
-        if (t < 0 && t > FILE_SIZE_LIMIT)
+        args = split_fill(w->line, w->line_len, c);
+        job->cmd.setbit.offset = atoll(args[1]);
+        t = job->cmd.setbit.offset >> 3;
+        if (t < 0 || t > FILE_SIZE_LIMIT)
         {
-            reply("ERR:OFFSET OUT OF RANGE\n", 24, &parsers[id].client);
+            reply("ERR:OFFSET OUT OF RANGE\n", 24);
             free_args(args, c - 1);
-            DLOG("Offset out of range: [%s]", args[1]);
-            DRETURN(-1, 1);
+            return;
         }
-        tjob.cmd.setbit.value = atol(args[2]);
-        if (tjob.cmd.setbit.value & ~1)
+        job->cmd.setbit.value = atol(args[2]);
+        if (job->cmd.setbit.value & ~1)
         {
-            reply("ERR:SETBIT(3) MUST BE 1 OR 0\n", 29, &parsers[id].client);
+            reply("ERR:SETBIT(3) MUST BE 1 OR 0\n", 29);
             free_args(args, c - 1);
-            DLOG("setbit(3) mast be 1 or 0", args[1]);
-            DRETURN(-1, 1);
+            return;
         }
-        strcpy(tjob.cmd.setbit.key, args[0]);
-        if (prepare_file(&tjob.desc[0], tjob.cmd.setbit.key, 0))
+        if (copy_key(job->cmd.setbit.key, args[0]))
         {
-            reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
+            reply("ERR:KEY TOO LONG\n", 17);
             free_args(args, c - 1);
-            DLOG("Filesystem failed: [%s]", args[0]);
-            DRETURN(-1, 1);
+            return;
         }
-        tjob.name = SETBIT;
         free_args(args, c - 1);
-        break;
-    case 4534844053247176213ULL:
+        if (prepare_file(&job->desc[0], job->cmd.setbit.key, 0))
+        {
+            reply("ERR:FILESYSTEM FAILED\n", 22);
+            release_all_descs(job);
+            return;
+        }
+        result = setbitCommand(&job->cmd.setbit, job->desc[0]);
+        if (result < 0)
+        {
+            reply("ERR:FILE ACCESS FAILED\n", 23);
+        }
+        else
+        {
+            reply(buf, snprintf(buf, 16, "%ld\n", result));
+        }
+        release_all_descs(job);
+        return;
+
+    case 4534844053247176213ULL: /* GETBIT */
         if (c != 3)
         {
-            reply("ERR:ARGS TOO MANY OR FEW\n", 25, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
+            reply("ERR:ARGS TOO MANY OR FEW\n", 25);
+            return;
         }
-        args = split_fill(parsers[id].buf, parsers[id].size, c);
-        tjob.cmd.getbit.offset = atol(args[1]);
-        t = tjob.cmd.getbit.offset >> 3;
-        if (t < 0 && t > FILE_SIZE_LIMIT)
+        args = split_fill(w->line, w->line_len, c);
+        job->cmd.getbit.offset = atol(args[1]);
+        t = job->cmd.getbit.offset >> 3;
+        if (t < 0 || t > FILE_SIZE_LIMIT)
         {
-            reply("ERR:OFFSET OUT OF RANGE\n", 24, &parsers[id].client);
+            reply("ERR:OFFSET OUT OF RANGE\n", 24);
             free_args(args, c - 1);
-            DLOG("Offset out of range: [%s]", args[1]);
-            DRETURN(-1, 1);
+            return;
         }
-        strcpy(tjob.cmd.getbit.key, args[0]);
-        r = prepare_file(&tjob.desc[0], tjob.cmd.getbit.key, 1);
+        if (copy_key(job->cmd.getbit.key, args[0]))
+        {
+            reply("ERR:KEY TOO LONG\n", 17);
+            free_args(args, c - 1);
+            return;
+        }
+        free_args(args, c - 1);
+        r = prepare_file(&job->desc[0], job->cmd.getbit.key, 1);
         if (r == -2)
         {
-            reply("0\n", 2, &parsers[id].client);
-            DLOG("File not exists: [%s]", args[0]);
-            free_args(args, c - 1);
-            DRETURN(-2, 1);
+            reply("0\n", 2);
+            return;
         }
-        else if (r == -1)
+        if (r == -1)
         {
-            reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
-            free_args(args, c - 1);
-            DLOG("Filesystem failed: [%s]", args[0]);
-            DRETURN(-1, 1);
+            reply("ERR:FILESYSTEM FAILED\n", 22);
+            release_all_descs(job);
+            return;
         }
-        tjob.name = GETBIT;
-        free_args(args, c - 1);
-        break;
-    case 2226304069708374537ULL:
+        result = getbitCommand(&job->cmd.getbit, job->desc[0]);
+        if (result < 0)
+        {
+            reply("ERR:FILE ACCESS FAILED\n", 23);
+        }
+        else
+        {
+            reply(buf, snprintf(buf, 16, "%ld\n", result));
+        }
+        release_all_descs(job);
+        return;
+
+    case 2226304069708374537ULL: /* BITOP */
         if (c < 4 || c > 19)
         {
-            reply("ERR:ARGS TOO MANY OR FEW\n", 25, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
+            reply("ERR:ARGS TOO MANY OR FEW\n", 25);
+            return;
         }
-        args = split_fill(parsers[id].buf, parsers[id].size, c);
+        args = split_fill(w->line, w->line_len, c);
         if ((args[0][0] == 'a' || args[0][0] == 'A') && !strcasecmp(args[0], "and"))
-            tjob.cmd.bitop.option = AND;
+        {
+            job->cmd.bitop.option = AND;
+        }
         else if ((args[0][0] == 'o' || args[0][0] == 'O') && !strcasecmp(args[0], "or"))
-            tjob.cmd.bitop.option = OR;
+        {
+            job->cmd.bitop.option = OR;
+        }
         else if ((args[0][0] == 'x' || args[0][0] == 'X') && !strcasecmp(args[0], "xor"))
-            tjob.cmd.bitop.option = XOR;
+        {
+            job->cmd.bitop.option = XOR;
+        }
         else if ((args[0][0] == 'n' || args[0][0] == 'N') && !strcasecmp(args[0], "not"))
-            tjob.cmd.bitop.option = NOT;
+        {
+            job->cmd.bitop.option = NOT;
+        }
         else
         {
-            reply("ERR:UKNOW OPTION\n", 17, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
+            reply("ERR:UKNOW OPTION\n", 17);
             free_args(args, c - 1);
-            DRETURN(-1, 1);
+            return;
         }
-        if (tjob.cmd.bitop.option == NOT && c != 4)
+        if (job->cmd.bitop.option == NOT && c != 4)
         {
-            reply("ERR:BITOP NOT JUST NEEDS ONE SOURCE\n", 36, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
+            reply("ERR:BITOP NOT JUST NEEDS ONE SOURCE\n", 36);
             free_args(args, c - 1);
-            DRETURN(-1, 1);
+            return;
         }
-        if (*args[1] == 5) //Ctrl+E mean countop
+        if (*args[1] == 5) /* Ctrl+E means countop/getop hook */
         {
             if (!strcasecmp(args[1] + 1, "COUNTOP"))
-                tjob.cmd.bitop.hook = COUNTOP;
+            {
+                job->cmd.bitop.hook = COUNTOP;
+            }
             else if (!strcasecmp(args[1] + 1, "GETOP"))
-                tjob.cmd.bitop.hook = GETOP;
+            {
+                job->cmd.bitop.hook = GETOP;
+            }
             else
             {
-                reply("ERR:UKNOW OPTION\n", 17, &parsers[id].client);
-                DLOG("Argument error: [%s]", parsers[id].buf);
+                reply("ERR:UKNOW OPTION\n", 17);
                 free_args(args, c - 1);
-                DRETURN(-1, 1);
+                return;
             }
         }
         else
         {
-            tjob.cmd.bitop.hook = NONE;
-            strcpy(tjob.cmd.bitop.key, args[1]);
-            if (prepare_file(&tjob.desc[0], tjob.cmd.bitop.key, 2))
+            job->cmd.bitop.hook = NONE;
+            if (copy_key(job->cmd.bitop.key, args[1]))
             {
-                reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
+                reply("ERR:KEY TOO LONG\n", 17);
                 free_args(args, c - 1);
-                DLOG("Filesystem failed: [%s]", args[0]);
-                DRETURN(-1, 1);
+                return;
+            }
+            if (prepare_file(&job->desc[0], job->cmd.bitop.key, 2))
+            {
+                reply("ERR:FILESYSTEM FAILED\n", 22);
+                free_args(args, c - 1);
+                release_all_descs(job);
+                return;
             }
         }
-        DLOG("Set BITOP hook to %d", tjob.cmd.bitop.hook);
-        tjob.cmd.bitop.count = c - 3;
-        if (prepare_files((struct desc_table ***)&tjob.desc[1], &args[2], tjob.cmd.bitop.count))
+        job->cmd.bitop.count = c - 3;
+        if (prepare_files((struct desc_table ***)&job->desc[1], &args[2], job->cmd.bitop.count))
         {
-            reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
+            reply("ERR:FILESYSTEM FAILED\n", 22);
             free_args(args, c - 1);
-            DLOG("Filesystem failed: [%s]", args[0]);
-            DRETURN(-1, 1);
+            release_all_descs(job);
+            return;
         }
-        tjob.name = BITOP;
         free_args(args, c - 1);
-        break;
-    case 9951046379166068647ULL:
+        result = bitopCommand(&job->cmd.bitop, job->desc[0], &job->desc[1]);
+        if (result < 0)
+        {
+            reply("ERR:FILE ACCESS FAILED\n", 23);
+        }
+        else
+        {
+            reply(buf, snprintf(buf, 16, "%ld\n", result));
+        }
+        release_all_descs(job);
+        return;
+
+    case 9951046379166068647ULL: /* BITCOUNT */
         if (c < 2 || c > 4)
         {
-            reply("ERR:ARGS TOO MANY OR FEW\n", 25, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
+            reply("ERR:ARGS TOO MANY OR FEW\n", 25);
+            return;
         }
-        args = split_fill(parsers[id].buf, parsers[id].size, c);
-
-        strcpy(tjob.cmd.bitcount.key, args[0]);
-        r = prepare_file(&tjob.desc[0], tjob.cmd.getbit.key, 1);
+        args = split_fill(w->line, w->line_len, c);
+        if (copy_key(job->cmd.bitcount.key, args[0]))
+        {
+            reply("ERR:KEY TOO LONG\n", 17);
+            free_args(args, c - 1);
+            return;
+        }
+        r = prepare_file(&job->desc[0], job->cmd.bitcount.key, 1);
         if (r == -2)
         {
-            reply("0\n", 2, &parsers[id].client);
-            DLOG("File not exists: [%s]", args[0]);
+            reply("0\n", 2);
             free_args(args, c - 1);
-            DRETURN(-2, 1);
+            return;
         }
-        else if (r == -1)
+        if (r == -1)
         {
-            reply("ERR:FILESYSTEM FAILED\n", 22, &parsers[id].client);
-            DLOG("Filesystem failed: [%s]", args[0]);
+            reply("ERR:FILESYSTEM FAILED\n", 22);
             free_args(args, c - 1);
-            DRETURN(-1, 1);
+            release_all_descs(job);
+            return;
         }
-        if (tjob.desc[0]->length == 0)
+        if (job->desc[0]->length == 0)
         {
-            reply("0\n", 2, &parsers[id].client);
-            DLOG("File size is zero: [%s]", args[0]);
+            reply("0\n", 2);
             free_args(args, c - 1);
-            DRETURN(-2, 1);
+            release_all_descs(job);
+            return;
         }
         if (c == 2)
         {
-            tjob.cmd.bitcount.start = 0;
-            tjob.cmd.bitcount.end = tjob.desc[0]->length - 1;
+            job->cmd.bitcount.start = 0;
+            job->cmd.bitcount.end = job->desc[0]->length - 1;
         }
         else if (c == 3)
         {
-            tjob.cmd.bitcount.start = atol(args[1]);
-            tjob.cmd.bitcount.end = tjob.desc[0]->length - 1;
+            job->cmd.bitcount.start = atol(args[1]);
+            job->cmd.bitcount.end = job->desc[0]->length - 1;
         }
         else if (c == 4)
         {
-            tjob.cmd.bitcount.start = atol(args[1]);
-            tjob.cmd.bitcount.end = atol(args[2]);
+            job->cmd.bitcount.start = atol(args[1]);
+            job->cmd.bitcount.end = atol(args[2]);
         }
-        tjob.name = BITCOUNT;
         free_args(args, c - 1);
-        break;
-    case 16475154490487774448ULL:
-        if (c < 3 && c > 5)
+        result = bitcountCommand(&job->cmd.bitcount, job->desc[0]);
+        if (result < 0)
         {
-            reply("ERR:ARGS TOO MANY OR FEW\n", 25, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
-        }
-        tjob.name = BITPOS;
-        args = split_fill(parsers[id].buf, parsers[id].size, c);
-        free_args(args, c - 1);
-        break;
-    case 16283480983475320022ULL:
-        if (c < 5)
-        {
-            reply("ERR:ARGS TOO FEW\n", 17, &parsers[id].client);
-            DLOG("Argument error: [%s]", parsers[id].buf);
-            DRETURN(-1, 1);
-        }
-        tjob.name = BITFIELD;
-        break;
-    default:
-        reply("ERR:UNKNOW CMD\n", 15, &parsers[id].client);
-        DLOG("Unknow command: [%s]", parsers[id].buf);
-        DRETURN(-1, 1);
-    }
-    tjob.created_at = parsers[id].created_at;
-    tjob.client = parsers[id].client;
-    DRETURN(0, 1);
-}
-
-void insert_parser_job(char *buf, size_t size, struct sockaddr_in *client)
-{
-    int i;
-    DLOG("into %s()", __func__);
-    for (i = 0; i < PARSER_QUEUE_NUM; i++)
-    {
-        if (parsers[i].size == 0)
-        {
-            memcpy(parsers[i].buf, buf, size);
-            parsers[i].buf[size] = '\0';
-            parsers[i].size = size;
-            parsers[i].created_at = get_us();
-            memcpy(&parsers[i].client, client, sizeof(struct sockaddr_in));
-            DLOG("Accept job #%d request from %s:%d: [%d]%s", i, inet_ntoa(parsers[i].client.sin_addr),
-                 ntohs(parsers[i].client.sin_port), parsers[i].size, parsers[i].buf);
-            pthread_cond_signal(&parser_job_ready); //send signal
-            return;
-        }
-    }
-    reply("ERR:QUEUE FULL\n", 15, &parsers[i].client);
-    DLOG("Parser queue is full, the request from %s:%d failed", inet_ntoa(parsers[i].client.sin_addr),
-         ntohs(parsers[i].client.sin_port));
-}
-
-static int get_parser_job(void)
-{
-    DLOG("into %s()", __func__);
-    for (; idx < PARSER_QUEUE_NUM; idx++)
-    {
-        if (parsers[idx].size)
-        {
-            DLOG("Get job #%d", idx);
-            DRETURN(idx, 1);
-        }
-    }
-    idx = 0;
-    DRETURN(-1, 1);
-}
-
-static void del_parser_job(int id)
-{
-    DLOG("into %s(%d)", __func__, id);
-    parsers[id].size = 0;
-    DLOG("Job #%d deleted, it took %ldus", id, get_us() - parsers[id].created_at);
-}
-
-static void *process_request(void *arg)
-{
-    int id;
-    while (1)
-    {
-        id = get_parser_job();
-        if (id >= 0)
-        {
-            if (!parse_arg(id))
-            {
-                push_job(&tjob);
-            }
-            del_parser_job(id);
+            reply("ERR:FILE ACCESS FAILED\n", 23);
         }
         else
         {
-            DLOG("No job, waitting...", id);
-            pthread_cond_wait(&parser_job_ready, &parser_mutex);
+            reply(buf, snprintf(buf, 16, "%ld\n", result));
         }
-        if (terminate)
+        release_all_descs(job);
+        return;
+
+    case 16475154490487774448ULL: /* BITPOS - not implemented, preserves existing behavior */
+        if (c < 3 && c > 5)
         {
-            DLOG("Parser thread #%d will be exit!", syscall(SYS_gettid));
-            pthread_exit(0);
+            reply("ERR:ARGS TOO MANY OR FEW\n", 25);
+            return;
         }
-    }
+        args = split_fill(w->line, w->line_len, c);
+        free_args(args, c - 1);
+        return;
 
-    pthread_exit(NULL);
-}
+    case 16283480983475320022ULL: /* BITFIELD - not implemented, preserves existing behavior */
+        if (c < 5)
+        {
+            reply("ERR:ARGS TOO FEW\n", 17);
+            return;
+        }
+        return;
 
-void init_parser(void)
-{
-    DLOG("into %s", __func__);
-    terminate = false;
-    pthread_mutex_init(&parser_mutex, NULL);
-    pthread_cond_init(&parser_job_ready, NULL);
-    parsers = calloc(sizeof(struct parser_queue), PARSER_QUEUE_NUM);
-    if (pthread_create(&parser, NULL, &process_request, NULL))
-    {
-        LOG("Create work failed: %s", strerror(errno));
-        LOG("Server terminal...");
-        exit(errno);
+    default:
+        reply("ERR:UNKNOW CMD\n", 15);
+        return;
     }
-    DLOG("Parser thread[%ld] created", parser);
 }

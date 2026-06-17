@@ -1,5 +1,4 @@
 #include "solidbits.h"
-extern bool terminate;
 char *strupr(char *str)
 {
     char *orig = str;
@@ -175,17 +174,7 @@ int gen_path(char *path, XXH64_hash_t hash)
 
 }
 
-void safe_exit(int signum)
-{
-    syslog(LOG_USER|LOG_INFO,"[QUIT]Recv Signal Number %d.\n", signum);
-    terminate = true;
-    while (job_queue.size)
-    {
-        sleep(1);
-    }
-    close_files();
-    exit(errno);
-}
+
 
 uint64_t get_us(void) {
     struct timeval tv;

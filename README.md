@@ -31,10 +31,6 @@ I recommend you running it on btrfs and turning on compression.
     -l :123
 ```
 
--m  Mode, default is GLIBC
-    *GLIBC* use fopen/fread to access files
-    *DIRECT_IO* use system call with O_DIRECT flag to access files
-    
 ## Commands
 
 BITCOUNT key [start end]
@@ -84,4 +80,4 @@ $sb->bitop('not', 'nice');
 
 
 
-***WARNING: The current version without Direct_IO mode.***
+***NOTE: Direct I/O mode has been removed; the server uses standard buffered file I/O.***

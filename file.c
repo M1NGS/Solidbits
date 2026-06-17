@@ -1,21 +1,30 @@
 #include "solidbits.h"
 
 static int idx = 0;
-int (*open_file)(XXH64_hash_t hash, int mode);
-void (*close_file)(struct desc_table *dt);
+
+/* Global definitions (declared extern in solidbits.h) */
+struct desc_table *descs;
+struct desc_table *XXTABLE[DESC_HASH_TABLE_SIZE];
+
+/* Coarse-grained lock protecting descs[] / XXTABLE[] structures.
+ * Held throughout prepare_file/get_avalible_slot; NOT nested with dt->lock. */
+static pthread_mutex_t file_table_lock;
+
+/* forward declaration: get_avalible_slot evicts a desc before close_file is defined */
+static void close_file(struct desc_table *dt);
 
 static int get_avalible_slot(void)
 {
-    int lowest = 0, id;
+    int lowest = -1, id; /* -1 = no evictable candidate */
     uint64_t tmp = get_us();
     DLOG("into %s()", __func__);
     for (; idx < DESC_TABLE_SIZE; idx++)
     {
         if (!descs[idx].hash)
         {
-            DRETURN(idx, 1);
+            return idx;
         }
-        if (tmp > descs[idx].last_access)
+        if (descs[idx].refs == 0 && tmp > descs[idx].last_access)
         {
             tmp = descs[idx].last_access;
             lowest = idx;
@@ -26,7 +35,12 @@ static int get_avalible_slot(void)
     if (DESC_HARD_LIMIT)
     {
         LOG("Description table full, request will be reject, beacuse DESC_HARD_LIMIT=%d", DESC_HARD_LIMIT);
-        DRETURN(-1, 1);
+        return -1;
+    }
+    if (lowest == -1)
+    {
+        LOG("Description table full and all slots in use, request rejected");
+        return -1;
     }
     id = descs[lowest].hash % DESC_HASH_TABLE_SIZE;
     if (descs[lowest].prev == NULL)
@@ -59,11 +73,11 @@ static int get_avalible_slot(void)
     pthread_mutex_destroy(&descs[lowest].lock);
     bzero(&descs[lowest], sizeof(struct desc_table));
 
-    DRETURN(lowest, 1);
+    return lowest;
 }
 
 
-static void glibc_close(struct desc_table *dt)
+static void close_file(struct desc_table *dt)
 {
     DLOG("Closing key %016llx", dt->hash);
     fflush(dt->fd.glibc);
@@ -71,19 +85,21 @@ static void glibc_close(struct desc_table *dt)
     fclose(dt->fd.glibc);
 }
 
-void glibc_close_files(void)
+void close_files(void)
 {
     int i;
+    pthread_mutex_lock(&file_table_lock);
     for (i=0; DESC_TABLE_SIZE > i; i++)
     {
         if (descs[i].hash)
         {
-            glibc_close(&descs[i]);    
+            close_file(&descs[i]);
         }
     }
+    pthread_mutex_unlock(&file_table_lock);
 }
 
-static int glibc_open(XXH64_hash_t hash, int mode)
+static int open_file(XXH64_hash_t hash, int mode)
 {
     char filename[256] = {0};
     int r;
@@ -136,12 +152,7 @@ static int glibc_open(XXH64_hash_t hash, int mode)
     DRETURN(idx, 1);
 }
 
-int system_open(XXH64_hash_t hash, int mode)
-{
-    DRETURN(idx, 1);
-}
-
-static size_t glibc_write(struct desc_table *dt, void *buf, size_t size, off_t offset)
+size_t write_to(struct desc_table *dt, void *buf, size_t size, off_t offset)
 {
     size_t r;
     pthread_mutex_lock(&dt->lock);
@@ -167,7 +178,7 @@ static size_t glibc_write(struct desc_table *dt, void *buf, size_t size, off_t o
     DRETURN(r, 1);
 }
 
-static size_t glibc_read(struct desc_table *dt, void *buf, size_t size, off_t offset)
+size_t read_from(struct desc_table *dt, void *buf, size_t size, off_t offset)
 {
     size_t r;
     pthread_mutex_lock(&dt->lock);
@@ -188,20 +199,22 @@ int prepare_file(struct desc_table **dt, char *key, int mode)
     struct desc_table *tmp, *new = NULL;
     XXH64_hash_t hash;
     off_t id, depth = 0;
-    int r;
+    int r, ret = 0;
     hash = XXH64(key, strlen(key), 0);
     id = hash % DESC_HASH_TABLE_SIZE;
     DLOG("into %s(point, %016llx)", __func__, hash);
+    pthread_mutex_lock(&file_table_lock);
     tmp = XXTABLE[id];
     while (tmp != NULL)
     {
         if (tmp->hash == hash)
         {
             DLOG("Found key %016llx at depth %d, point is %p", hash, depth, tmp);
-            memcpy(dt, &tmp, sizeof(struct desc_table *));
+            *dt = tmp;
+            tmp->refs++;
             tmp->access_times++;
             tmp->last_access = get_us();
-            DRETURN(0, 1);
+            goto out;
         }
         else if (tmp->next != NULL)
         {
@@ -214,16 +227,19 @@ int prepare_file(struct desc_table **dt, char *key, int mode)
         }
     }
     DLOG("Can't find key %016llx util depth %d, will create or open file.", hash, depth);
-    new = &descs[(r = open_file(hash, mode))]; //terrible code, sorry
+    r = open_file(hash, mode); //terrible code, sorry
     if (r < 0)
     {
-        DRETURN(r, 1);
+        ret = r;
+        goto out;
     }
+    new = &descs[r];
     //init some fields
     new->hash = hash;
     new->created_at = get_us();
     new->last_access = new->created_at;
     new->access_times = 1;
+    new->refs = 1;
     pthread_mutex_init(&new->lock, NULL);
     if (depth)
     { //set link for hash
@@ -232,8 +248,10 @@ int prepare_file(struct desc_table **dt, char *key, int mode)
     }
     else
         XXTABLE[id] = new;
-    memcpy(dt, &new, sizeof(struct desc_table *)); //file desc of job
-    DRETURN(0, 1);
+    *dt = new; //file desc of job
+out:
+    pthread_mutex_unlock(&file_table_lock);
+    return ret;
 }
 
 int prepare_files(struct desc_table ***dts, char **keys, int count)
@@ -256,19 +274,16 @@ int prepare_files(struct desc_table ***dts, char **keys, int count)
     DRETURN(0, 1);
 }
 
+void release_desc(struct desc_table *dt)
+{
+    if (dt == NULL) return;
+    pthread_mutex_lock(&file_table_lock);
+    dt->refs--;
+    pthread_mutex_unlock(&file_table_lock);
+}
+
 void init_file(void)
 {
+    pthread_mutex_init(&file_table_lock, NULL);
     descs = calloc(sizeof(struct desc_table), DESC_TABLE_SIZE);
-    if (server.mode == GLIBC)
-    {
-        write_to = &glibc_write;
-        read_from = &glibc_read;
-        open_file = &glibc_open;
-        close_file = &glibc_close;
-        close_files = &glibc_close_files;
-    }
-    else if (server.mode == DIRECT_IO)
-    {
-        open_file = &system_open;
-    }
 }
