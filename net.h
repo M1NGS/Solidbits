@@ -28,6 +28,7 @@ struct work_req
     char          *resp_buf;  /* output: accumulated reply text */
     size_t         resp_len;
     size_t         resp_cap;
+    int            oom;       /* set by reply() if resp_buf could not grow */
     uv_write_t     wr_req;
     struct job     job;       /* parsed command + desc references */
 };
