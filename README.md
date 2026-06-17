@@ -1,83 +1,118 @@
 # Solidbits
-A redis style bitmap database works on the filesystem
+A redis-style bitmap database that works on the filesystem.
 
-## Introduce
+## Introduction
 
-Solidbits just a experimental product, works on the udp protocol now, it working good.
+Solidbits is an experimental, file-backed bitmap database. It speaks a simple
+line protocol over **TCP** and supports `SETBIT` / `GETBIT` / `BITCOUNT` /
+`BITOP` / `BITCOP`, behaving like the Redis bit commands (`BITCOUNT`'s range
+arguments are byte offsets, same as Redis).
 
-it supports BITGET/BITSET/BITCOUNT/BITOP/BITCOP, all command works like redis except BITCOUNT's parameter.
+File storage and the hash table rely on xxhash64; 20 million random key names
+were tested with zero collisions, so xxhash64 is considered safe here.
 
-file storage and hashtable depend on xxhash64, i did 20 million random key name tests and collision probability is zero.
+Running it on btrfs with compression is recommended.
 
-I think xxhash64 is safe for file storage.
-
-I recommend you running it on btrfs and turning on compression.
-
-## Parameter options
-
--d  working directory path, the data will be stored here.
-
--D  Enable debug mode, verbosely system log, default is disbale;
-
--p  PID file path
-
--w  Number of worker, default is number of cores * 2
-
--l  Listen, default is 127.0.0.1:6379
+## Build
 
 ```
-    -l 127.0.0.1:123
-    -l 192.168.0.1:123
-    -l :123
+./configure
+make
+```
+
+Requires **libuv >= 1.0**, looked up via pkg-config. Install `libuv1-dev`
+(Debian/Ubuntu) or `libuv-devel` (RHEL/Fedora). For a custom install prefix:
+
+```
+./configure --with-libuv=/path/to/prefix
+```
+
+## Options
+
+```
+-d  working directory (data is stored here; required)
+-D  enable debug mode (verbose syslog); default off
+-p  PID file path
+-w  worker thread-pool size; default = cores * 2
+-l  listen address; default 127.0.0.1:6379
+      -l 127.0.0.1:6380
+      -l 192.168.0.1:6380
+      -l :6380
+```
+
+Run:
+
+```
+./solidbits -d /var/lib/solidbits -p /var/run/solidbits.pid
 ```
 
 ## Commands
 
-BITCOUNT key [start end]
+Requests are text lines terminated by `\n`, arguments separated by spaces.
+Replies are `0`, `1`, a number, or `ERR:...`.
+
+### SETBIT / GETBIT
 
 ```
-    SETBIT mykey 95 1 //create a key and set size to 12 bytes
-    BITCOUNT mykey //same redis
-    BITCOUNT mykey 10 // from offset 10 to 12
-    BITCOUNT mykey 10 -1 // from offset 10 to 11
-    BITCOUNT mykey -3 -2 // from offset 9 to 10
+SETBIT key offset value     # value is 0 or 1; returns the old bit
+GETBIT key offset           # returns 0 or 1
 ```
 
-BITCOP is a visual command base on BITOP
-
-*BITOP operation ^ECOUNTOP key [key ...]*
-
-
-## Roadmap
-
-v1.01 Add Direct_IO and optimization some modules, it's a first release version.
-
-v1.02 Add test tools and provides option in configure to completely without DLOG and DRETURN macros.
-
-v1.03 Add BITCOP, means BITCOUNT(BITOP)
-
-v1.04 Add BITGOP, means BITGET(BITOP)
-
-v1.05 Add Cache system for BITCOP/BITGOP/GETBIT, the cache data will auto updated when SETBIT.
-
-v2.0 Rebuild everything.
-
-BTW: If you have some feature requirements, please write an Issue let me know.
-
-
-## Client of PHP
+### BITCOUNT
 
 ```
-$sb = new Solidbits('127.0.0.1',1233);
-
-$sb->setbit('dist', 12, 1);
-$sb->getbit('dist', 12);
-$sb->bitop('and', 'dist', 'src1', "src2");
-$sb->bitcount('and'[, start, end]);
-$sb->bitop('not', 'nice');
-
+BITCOUNT key [start end]    # count set bits; start/end are byte offsets,
+                            # negative offsets count from the end (-1 = last byte)
 ```
 
+```
+SETBIT mykey 95 1       # creates the key, file grows to 12 bytes
+BITCOUNT mykey          # whole key
+BITCOUNT mykey 10       # bytes 10..end
+BITCOUNT mykey 10 -1    # bytes 10..last
+BITCOUNT mykey -3 -2    # bytes 9..10
+```
 
+### BITOP
 
-***NOTE: Direct I/O mode has been removed; the server uses standard buffered file I/O.***
+```
+BITOP AND|OR|XOR dest src [src ...]    # store op result into dest
+BITOP NOT dest src                     # dest = ~src
+```
+
+### BITCOP  (BITCOUNT of BITOP)
+
+Count set bits of a BITOP result without storing it. The dest slot carries a
+`\x05COUNTOP` marker (Ctrl-E + `COUNTOP`):
+
+```
+BITOP AND|OR|XOR \x05COUNTOP src [src ...]
+```
+
+## Python client
+
+A minimal client lives in `clients/python/`:
+
+```python
+from solidbits import Solidbits
+
+with Solidbits("127.0.0.1", 6379) as sb:
+    sb.setbit("foo", 95, 1)
+    print(sb.getbit("foo", 95))        # 1
+    print(sb.bitcount("foo"))           # 1
+    sb.bitop("AND", "c", "a", "b")
+    print(sb.bitcop("AND", "a", "b"))   # count bits of (a AND b)
+```
+
+Run the bundled example:
+
+```
+cd clients/python
+python3 example.py
+```
+
+## Notes
+
+- Single backend: standard buffered file I/O (the former Direct I/O mode was removed).
+- Requests on one connection are processed in order (ordered pipelining);
+  different connections run in parallel via the libuv thread pool.
