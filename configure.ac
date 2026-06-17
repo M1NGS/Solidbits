@@ -14,6 +14,23 @@ AC_PROG_CC
 # Checks for libraries.
 AC_PROG_RANLIB
 AC_CHECK_LIB([pthread], [pthread_create])
+# libuv (TCP backend). --with-libuv=PATH extends the pkg-config search path
+# so custom (non-system) installs can be found.
+AC_ARG_WITH([libuv],
+  [AS_HELP_STRING([--with-libuv=PATH],
+    [prefix where libuv is installed; looks in PATH/lib/pkgconfig and PATH/lib64/pkgconfig])],
+  [if test "$withval" != "no" -a "$withval" != "yes"; then
+     for d in "$withval/lib/pkgconfig" "$withval/lib64/pkgconfig"; do
+       test -d "$d" && PKG_CONFIG_PATH="$d${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+     done
+     export PKG_CONFIG_PATH
+   fi])
+
+PKG_CHECK_MODULES([LIBUV], [libuv >= 1.0],
+  [],
+  [AC_MSG_ERROR([libuv >= 1.0 not found.
+    Install it: apt install libuv1-dev (Debian/Ubuntu) or libuv-devel (RHEL/Fedora),
+    or point to a custom prefix: ./configure --with-libuv=/path/to/prefix])])
 
 
 

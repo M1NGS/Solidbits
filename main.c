@@ -1,36 +1,35 @@
-#include "solidbits.h"
+#include "net.h"
+#include <stdlib.h>
+
+struct server_t server;
+
+static uv_loop_t loop;
+static uv_signal_t sigterm;
+
+static void on_sigterm(uv_signal_t *h, int signum)
+{
+    (void)signum;
+    LOG("[QUIT]recv SIGTERM, shutting down");
+    close_files();
+    uv_stop(h->loop);
+}
 
 int main(int argc, char const *argv[])
 {
-    //init and get param
     int arg;
-    size_t count;
-    struct sockaddr_in client;
+    char pool_sz[16];
     opterr = 0;
     bzero(&server.socket, sizeof(server.socket));
     server.socket.sin_family = PF_INET;
-    server.mode = GLIBC; //work with glibc default
     server.socket.sin_addr.s_addr = inet_addr("127.0.0.1");
     server.socket.sin_port = htons(6379); //listen on 127.0.0.1:6379 default
     server.worker = get_nprocs() * 2;
     INIT_LOG();
     LOG("System preparing for start");
-    while ((arg = getopt(argc, (char **)argv, "m:l:d:Dp:w:")) != -1)
+    while ((arg = getopt(argc, (char **)argv, "l:d:Dp:w:")) != -1)
     {
         switch (arg)
         {
-        case 'm':
-            if (!strcasecmp(optarg, "glibc"))
-                server.mode = GLIBC;
-            else if (!strcasecmp(optarg, "direct_io"))
-                server.mode = DIRECT_IO;
-            else
-            {
-                printf("The value %s of argument -%c invalid!\n\n", optarg, arg);
-                return -1;
-            }
-            LOG("[SET]Set mode to %s", strupr(optarg));
-            break;
         case 'l':
             if (set_addr_port(optarg))
             {
@@ -93,37 +92,29 @@ int main(int argc, char const *argv[])
     //fork and write pid file
     daemonize();
     //signal setting
-    signal(SIGTERM, safe_exit); //kill
     signal(SIGHUP, SIG_IGN);  //kill -HUP
     signal(SIGPIPE, SIG_IGN);
 
+    //libuv thread pool size must be set before uv_loop_init / first uv_queue_work
+    snprintf(pool_sz, sizeof(pool_sz), "%d", server.worker);
+    setenv("UV_THREADPOOL_SIZE", pool_sz, 1);
+
+    uv_loop_init(&loop);
     //init file module
     init_file();
-
     //init hash table
     bzero(XXTABLE, DESC_HASH_TABLE_SIZE * sizeof(struct desc_table *));
-
-    //start threads
-    init_parser();
-    init_workers();
-    //listen
-    server.s_size = sizeof(server.socket);
-    if ((server.fd = socket(PF_INET, SOCK_DGRAM, 0)) < 0) //old is AF_UNIX
+    //SIGTERM handled in loop thread: safe to call close_files + uv_stop
+    uv_signal_init(&loop, &sigterm);
+    uv_signal_start(&sigterm, on_sigterm, SIGTERM);
+    //listen (TCP via libuv)
+    if (run_server(&loop, &server.socket))
     {
-        LOG("Socket error: %s", strerror(errno));
         LOG("Server terminal...");
-        return errno;
+        return -1;
     }
-    if (bind(server.fd, (struct sockaddr *)&server.socket, server.s_size) < 0)
-    {
-        LOG("Bind error: %s", strerror(errno));
-        LOG("Server terminal...");
-        return errno;
-    }
-
-    for (;;)
-    {
-        count = recvfrom(server.fd, server.buf, UDP_DATA_SIZE, 0, (struct sockaddr *)&client, (socklen_t *)&server.s_size);
-        insert_parser_job(server.buf, count, &client);
-    }
+    LOG("Server started");
+    uv_run(&loop, UV_RUN_DEFAULT);
+    uv_loop_close(&loop);
+    return 0;
 }

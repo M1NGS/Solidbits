@@ -151,7 +151,7 @@ size_t redisPopcount(void *s, long count)
 
 long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
 {
-    size_t o = 0, r, t = 0, bits = 0;
+    size_t o = 0, r, bits = 0;
     void *s;
     long count;
 
@@ -161,9 +161,21 @@ long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
         DRETURN(0, 1);
     }
     if (cmd->start < 0)
-        cmd->start = strlen + cmd->start % (0 - strlen);
+    {
+        cmd->start = (long)strlen + cmd->start;
+        if (cmd->start < 0)
+        {
+            cmd->start = 0;
+        }
+    }
     if (cmd->end < 0)
-        cmd->end = strlen - 1 + cmd->end % (0 - strlen);
+    {
+        cmd->end = (long)strlen + cmd->end;
+        if (cmd->end < 0)
+        {
+            cmd->end = 0;
+        }
+    }
 
     if (cmd->end >= strlen)
         cmd->end = strlen - 1;
@@ -173,27 +185,45 @@ long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
         DRETURN(0, 1);
     }
     count = cmd->end - cmd->start + 1;
-    t = count / FILE_BUFFER_SIZE;
-    if (count % FILE_BUFFER_SIZE != 0)
-        t++;
     s = memalign(4, FILE_BUFFER_SIZE);
-    o = cmd->start;
-    while (t--)
+    if (s == NULL)
     {
-        r = read_from(dt, s, FILE_BUFFER_SIZE, o);
+        DRETURN(-1, 1);   /* OOM */
+    }
+    o = cmd->start;
+    size_t remaining = count;
+    while (remaining > 0)
+    {
+        size_t to_read = remaining < FILE_BUFFER_SIZE ? remaining : FILE_BUFFER_SIZE;
+        r = read_from(dt, s, to_read, o);
+        if (r == 0)
+        {
+            break; /* file shorter than [start,end] (shouldn't happen after clamp) */
+        }
         o += r;
         bits += redisPopcount(s, r);
+        remaining -= r;
     }
     free(s);
     DRETURN(bits, 1);
 }
 
-void op_malloc(unsigned char **p, long count)
+static int op_malloc(unsigned char **p, long count)
 {
-    while (count--)
+    long i;
+    for (i = 0; i < count; i++)
     {
-        p[count] = memalign(8, FILE_BUFFER_SIZE);
+        p[i] = memalign(8, FILE_BUFFER_SIZE);
+        if (p[i] == NULL)
+        {
+            while (i-- > 0)
+            {
+                free(p[i]);
+            }
+            return -1;
+        }
     }
+    return 0;
 }
 
 void op_free(unsigned char **p, long count)
@@ -204,7 +234,7 @@ void op_free(unsigned char **p, long count)
     }
 }
 
-long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
+long bitopCommand(struct bitop_cmd *cmd, struct desc_table *dest, struct desc_table **dts)
 {
     int i, maxidx, idx, times, size, offset = 0;
     size_t maxlen = 0, bits = 0;
@@ -240,7 +270,10 @@ long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
     {
         DRETURN(0, 1);
     }
-    op_malloc(p, cmd->count);
+    if (op_malloc(p, cmd->count))
+    {
+        DRETURN(-1, 1);   /* OOM */
+    }
     while (t[maxidx])
     {
         for (i = 0; i < cmd->count; i++)
@@ -353,7 +386,7 @@ long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts)
         }
         if (cmd->hook == NONE)
         {
-            if (!write_to(dts[-1], p[0], idx, offset))
+            if (!write_to(dest, p[0], idx, offset))
             {
                 op_free(p, cmd->count);
                 DRETURN(-1, 1);

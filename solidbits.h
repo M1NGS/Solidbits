@@ -34,8 +34,6 @@
 #define DESC_HASH_TABLE_SIZE 65537
 #define FILE_NAME_LENGTH 65 //sha256 hash and \n
 #define SYSLOG_NAME "Solidbits"
-#define JOB_QUEUE_NUM 256
-#define PARSER_QUEUE_NUM 16
 #define WORKER_MINIMUM 1
 #define ARG_SINGLE_PART 65
 #define ARG_PART_MAXIMUM 17 //not include command,just args
@@ -43,7 +41,6 @@
 #define CMD_MININUM 10 //like GETBIT A 1
 #define INIT_LOG() openlog(SYSLOG_NAME, LOG_PID|LOG_CONS, LOG_DEBUG);
 #define LOG(msg,...) syslog(LOG_DEBUG,msg,##__VA_ARGS__);
-#define UDP_DATA_SIZE 1464
 
 
 enum OP_OPTIONS
@@ -104,14 +101,6 @@ struct bitop_cmd
     enum OP_OPTIONS option;
 };
 
-enum MODE
-{
-    GLIBC,
-    DIRECT_IO,
-    AUTO,  // Future feature
-    RAW    // Future feature
-};
-
 struct desc_table
 {
     XXH64_hash_t hash;
@@ -123,33 +112,26 @@ struct desc_table
     uint64_t last_access; 
     uint64_t access_times;
     uint64_t created_at; //open or create in current life cycle.
+    volatile int refs; //reference count, prevent LRU evicting in-use desc
     pthread_mutex_t lock;
     struct desc_table *next;
     struct desc_table *prev;
-} *descs;
+};
+extern struct desc_table *descs;
 
-struct desc_table *XXTABLE[DESC_HASH_TABLE_SIZE];  //create in stack for speed
+extern struct desc_table *XXTABLE[DESC_HASH_TABLE_SIZE];
 
-struct worker_table
-{
-    pthread_t id;
-    int   tid;
-    size_t j_count; //how many job done.
-} *workers;
-
-struct
+struct server_t
  {
-    enum MODE mode;
     struct sockaddr_in socket;
     int s_size;
     char *pid;
     char *dir;
     int worker;
     int debug:1;
-    int fd;
-    char buf[UDP_DATA_SIZE];
 
-} server;
+};
+extern struct server_t server;
 
 
 struct job
@@ -161,27 +143,9 @@ struct job
         struct bitcount_cmd bitcount;
         struct bitop_cmd    bitop;
     } cmd;
-    struct sockaddr_in client;
     struct desc_table *desc[ARG_PART_MAXIMUM];
     uint64_t created_at;
 };
-
-
-struct
-{
-    struct job *jobs;
-    int front;
-    int rear;
-    int size;
-}  job_queue;
-
-struct parser_queue
-{
-    char buf[UDP_DATA_SIZE];
-    size_t size;
-    struct sockaddr_in client;
-    uint64_t created_at;
-} *parsers;
 
 
 char *strupr(char *str);
@@ -189,24 +153,18 @@ int set_addr_port(char *str);
 void daemonize(void);
 int check_dir(char *path);
 int check_file(char *path);
-void safe_exit(int signum);
-void init_workers(void);
-void *do_job(void * id);
 uint64_t get_us();
-void insert_parser_job(char *buf, size_t size, struct sockaddr_in * client);
-void init_parser(void);
 int prepare_file(struct desc_table **dt, char* key, int mode);
 int prepare_files(struct desc_table ***dts, char **keys, int count);
+void release_desc(struct desc_table *dt);
 int gen_path(char *path, XXH64_hash_t hash);
-void init_job(void);
-int push_job(struct job *j);
 int setbitCommand(struct setbit_cmd *cmd, struct desc_table *dt);
 int getbitCommand(struct getbit_cmd *cmd, struct desc_table *dt);
 long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt);
-long bitopCommand(struct bitop_cmd *cmd, struct desc_table **dts);
-size_t (*write_to) (struct desc_table *dt, void *buf, size_t size, off_t offset);
-size_t (*read_from) (struct desc_table *dt, void *buf, size_t size, off_t offset);
-void (*close_files) (void);
+long bitopCommand(struct bitop_cmd *cmd, struct desc_table *dest, struct desc_table **dts);
+size_t write_to (struct desc_table *dt, void *buf, size_t size, off_t offset);
+size_t read_from (struct desc_table *dt, void *buf, size_t size, off_t offset);
+void close_files (void);
 void init_file(void);
 char *time2string(char* buf, uint64_t us);
 
@@ -234,4 +192,3 @@ char *time2string(char* buf, uint64_t us);
     }                         \
     return x;
 
-#define reply(x,y,z) sendto(server.fd, x, y, 0, (struct sockaddr *)z, sizeof(struct sockaddr_in));
