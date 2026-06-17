@@ -5,7 +5,7 @@
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
-bin="$root/solidbits"
+bin="$root/src/solidbits"
 port="${SOLIDBITS_PORT:-16379}"
 data="$(mktemp -d)"
 pidfile="$data/solidbits.pid"

@@ -43,7 +43,7 @@ Requires **libuv >= 1.0**, looked up via pkg-config. Install `libuv1-dev`
 Run:
 
 ```
-./solidbits -d /var/lib/solidbits -p /var/run/solidbits.pid
+./src/solidbits -d /var/lib/solidbits -p /var/run/solidbits.pid
 ```
 
 ## Commands

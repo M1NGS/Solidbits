@@ -3,9 +3,9 @@
 
 AC_PREREQ([2.69])
 AC_INIT([solidbits], 1.0)
-AC_CONFIG_SRCDIR([main.c])
+AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 AM_INIT_AUTOMAKE
 : ${CFLAGS="-O3 -g -Wall"}
 # Checks for programs.
