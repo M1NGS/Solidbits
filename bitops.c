@@ -185,8 +185,9 @@ long bitcountCommand(struct bitcount_cmd *cmd, struct desc_table *dt)
         DRETURN(0, 1);
     }
     count = cmd->end - cmd->start + 1;
-    s = memalign(4, FILE_BUFFER_SIZE);
-    if (s == NULL)
+    /* posix_memalign requires alignment to be a multiple of sizeof(void*)
+     * (8 on 64-bit); 8 also satisfies the uint32_t access in redisPopcount */
+    if (posix_memalign(&s, 8, FILE_BUFFER_SIZE) != 0)
     {
         DRETURN(-1, 1);   /* OOM */
     }
@@ -213,8 +214,7 @@ static int op_malloc(unsigned char **p, long count)
     long i;
     for (i = 0; i < count; i++)
     {
-        p[i] = memalign(8, FILE_BUFFER_SIZE);
-        if (p[i] == NULL)
+        if (posix_memalign((void **)&p[i], 8, FILE_BUFFER_SIZE) != 0)
         {
             while (i-- > 0)
             {
